@@ -5,6 +5,7 @@ This repository contains `code.sql`, a collection of SQL queries and analysis sn
 ## Files
 
 - `code.sql` — Primary SQL file containing all queries, CTEs, and commentary used for the analysis.
+- `extra.sql` — Secondary SQL file containing all queries, CTEs, and commentary used for the analysis.
 
 ## Purpose
 
