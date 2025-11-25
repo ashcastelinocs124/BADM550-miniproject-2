@@ -1,0 +1,229 @@
+-- QUERY 1: HOURLY PATTERNS
+
+WITH hourly_transfers AS (
+    SELECT 
+        EXTRACT(HOUR FROM evt_block_time) AS hour_of_day,
+        COUNT(*) AS tx_count,
+        SUM(value / 1e6) AS volume_usdc,
+        AVG(value / 1e6) AS avg_tx_size
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY hour_of_day
+)
+SELECT 
+    hour_of_day,
+    AVG(tx_count) AS avg_transactions,
+    AVG(volume_usdc) AS avg_volume_usdc,
+    AVG(avg_tx_size) AS avg_transaction_size
+FROM hourly_transfers
+GROUP BY hour_of_day
+ORDER BY hour_of_day;
+
+
+-- QUERY 2: DAY-OF-WEEK PATTERNS
+
+SELECT 
+    CASE EXTRACT(DOW FROM evt_block_time)
+        WHEN 0 THEN 'Sunday'
+        WHEN 1 THEN 'Monday'
+        WHEN 2 THEN 'Tuesday'
+        WHEN 3 THEN 'Wednesday'
+        WHEN 4 THEN 'Thursday'
+        WHEN 5 THEN 'Friday'
+        WHEN 6 THEN 'Saturday'
+    END AS day_name,
+    COUNT(*) AS total_transactions,
+    SUM(value / 1e6) AS total_volume_usdc,
+    AVG(value / 1e6) AS avg_transaction_size
+FROM erc20_ethereum.evt_Transfer
+WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+GROUP BY EXTRACT(DOW FROM evt_block_time), day_name
+ORDER BY EXTRACT(DOW FROM evt_block_time);
+
+
+-- QUERY 3: STRESS PERIOD IDENTIFICATION
+
+WITH daily_metrics AS (
+    SELECT 
+        DATE_TRUNC('day', evt_block_time) AS day,
+        COUNT(*) AS tx_count,
+        SUM(value / 1e6) AS total_volume
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY day
+),
+stats AS (
+    SELECT 
+        AVG(tx_count) AS mean_tx,
+        STDDEV(tx_count) AS stddev_tx,
+        AVG(total_volume) AS mean_volume,
+        STDDEV(total_volume) AS stddev_volume
+    FROM daily_metrics
+)
+SELECT 
+    dm.day,
+    dm.tx_count,
+    dm.total_volume,
+    (dm.tx_count - s.mean_tx) / NULLIF(s.stddev_tx, 0) AS tx_z_score,
+    (dm.total_volume - s.mean_volume) / NULLIF(s.stddev_volume, 0) AS vol_z_score,
+    CASE 
+        WHEN (dm.tx_count - s.mean_tx) / NULLIF(s.stddev_tx, 0) > 2 
+            OR (dm.total_volume - s.mean_volume) / NULLIF(s.stddev_volume, 0) > 2 
+        THEN 'HIGH_STRESS'
+        ELSE 'NORMAL'
+    END AS activity_category
+FROM daily_metrics dm
+CROSS JOIN stats s
+ORDER BY dm.day DESC;
+
+
+-- QUERY 4: TRANSACTION SIZE DURING STRESS VS NORMAL
+
+WITH daily_metrics AS (
+    SELECT 
+        DATE_TRUNC('day', evt_block_time) AS day,
+        COUNT(*) AS tx_count
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY day
+),
+stats AS (
+    SELECT AVG(tx_count) AS mean_tx, STDDEV(tx_count) AS stddev_tx
+    FROM daily_metrics
+),
+classified_days AS (
+    SELECT 
+        dm.day,
+        CASE WHEN (dm.tx_count - s.mean_tx) / NULLIF(s.stddev_tx, 0) > 2 
+            THEN 'STRESS' ELSE 'NORMAL' END AS period_type
+    FROM daily_metrics dm CROSS JOIN stats s
+)
+SELECT 
+    cd.period_type,
+    CASE 
+        WHEN t.value / 1e6 < 1000 THEN '< $1K'
+        WHEN t.value / 1e6 < 10000 THEN '$1K-$10K'
+        WHEN t.value / 1e6 < 100000 THEN '$10K-$100K'
+        WHEN t.value / 1e6 < 1000000 THEN '$100K-$1M'
+        ELSE '> $1M'
+    END AS size_bucket,
+    COUNT(*) AS tx_count,
+    SUM(t.value / 1e6) AS total_volume
+FROM erc20_ethereum.evt_Transfer t
+INNER JOIN classified_days cd ON DATE_TRUNC('day', t.evt_block_time) = cd.day
+WHERE t.contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    AND t.evt_block_time >= NOW() - INTERVAL '6' MONTH
+GROUP BY cd.period_type, size_bucket
+ORDER BY cd.period_type, 
+    CASE size_bucket
+        WHEN '< $1K' THEN 1 WHEN '$1K-$10K' THEN 2 
+        WHEN '$10K-$100K' THEN 3 WHEN '$100K-$1M' THEN 4 ELSE 5 END;
+
+
+-- QUERY 5: HOURLY PATTERNS - STRESS VS NORMAL DAYS
+
+WITH daily_metrics AS (
+    SELECT DATE_TRUNC('day', evt_block_time) AS day, COUNT(*) AS tx_count
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY day
+),
+stats AS (
+    SELECT AVG(tx_count) AS mean_tx, STDDEV(tx_count) AS stddev_tx
+    FROM daily_metrics
+),
+stress_days AS (
+    SELECT dm.day FROM daily_metrics dm CROSS JOIN stats s
+    WHERE (dm.tx_count - s.mean_tx) / NULLIF(s.stddev_tx, 0) > 2
+)
+SELECT 
+    EXTRACT(HOUR FROM t.evt_block_time) AS hour_of_day,
+    CASE WHEN sd.day IS NOT NULL THEN 'STRESS' ELSE 'NORMAL' END AS period_type,
+    COUNT(*) AS tx_count,
+    SUM(t.value / 1e6) AS volume_usdc
+FROM erc20_ethereum.evt_Transfer t
+LEFT JOIN stress_days sd ON DATE_TRUNC('day', t.evt_block_time) = sd.day
+WHERE t.contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    AND t.evt_block_time >= NOW() - INTERVAL '6' MONTH
+GROUP BY hour_of_day, period_type
+ORDER BY hour_of_day, period_type;
+
+
+-- QUERY 6: ETH PRICE VOLATILITY CORRELATION
+
+WITH usdc_daily AS (
+    SELECT 
+        DATE_TRUNC('day', evt_block_time) AS day,
+        COUNT(*) AS usdc_tx_count,
+        SUM(value / 1e6) AS usdc_volume
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY day
+),
+eth_volatility AS (
+    SELECT 
+        DATE_TRUNC('day', minute) AS day,
+        AVG(price) AS avg_price,
+        (MAX(price) - MIN(price)) / NULLIF(AVG(price), 0) * 100 AS daily_swing_pct
+    FROM prices.usd
+    WHERE symbol = 'ETH' AND minute >= NOW() - INTERVAL '6' MONTH
+    GROUP BY day
+)
+SELECT 
+    u.day,
+    u.usdc_tx_count,
+    u.usdc_volume,
+    e.avg_price AS eth_price,
+    e.daily_swing_pct,
+    CASE 
+        WHEN e.daily_swing_pct > 10 THEN 'HIGH_VOLATILITY'
+        WHEN e.daily_swing_pct > 5 THEN 'MODERATE'
+        ELSE 'LOW_VOLATILITY'
+    END AS market_condition
+FROM usdc_daily u
+LEFT JOIN eth_volatility e ON u.day = e.day
+WHERE e.day IS NOT NULL
+ORDER BY u.day DESC;
+
+
+-- QUERY 7: GAS PRICE IMPACT
+
+WITH hourly_usdc AS (
+    SELECT 
+        DATE_TRUNC('hour', evt_block_time) AS hour,
+        COUNT(*) AS usdc_tx_count,
+        SUM(value / 1e6) AS usdc_volume
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '6' MONTH
+    GROUP BY hour
+),
+gas_metrics AS (
+    SELECT 
+        DATE_TRUNC('hour', block_time) AS hour,
+        AVG(gas_price / 1e9) AS avg_gas_gwei
+    FROM ethereum.transactions
+    WHERE block_time >= NOW() - INTERVAL '6' MONTH
+        AND gas_price IS NOT NULL
+    GROUP BY hour
+)
+SELECT 
+    u.hour,
+    u.usdc_tx_count,
+    u.usdc_volume,
+    g.avg_gas_gwei,
+    CASE 
+        WHEN g.avg_gas_gwei > 100 THEN 'HIGH_CONGESTION'
+        WHEN g.avg_gas_gwei > 50 THEN 'MODERATE'
+        ELSE 'LOW_CONGESTION'
+    END AS network_condition
+FROM hourly_usdc u
+LEFT JOIN gas_metrics g ON u.hour = g.hour
+WHERE g.hour IS NOT NULL
+ORDER BY u.hour DESC; 
