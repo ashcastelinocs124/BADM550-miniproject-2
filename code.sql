@@ -171,6 +171,7 @@ limit 10;
 
 
 """
+Query 5 : Correlation between Gas Prices and USDC
 1)Business Question
 "How does Ethereum network congestion (measured by gas prices) affect USDC stablecoin transaction activity on an hourly basis, and when are the optimal times to execute transfers?"
 Purpose
@@ -237,3 +238,6 @@ FROM hourly_usdc u
 LEFT JOIN gas_metrics g ON u.hour = g.hour
 WHERE g.hour IS NOT NULL
 ORDER BY u.hour ASC;  
+
+
+
