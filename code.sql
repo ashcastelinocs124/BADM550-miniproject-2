@@ -259,3 +259,109 @@ SELECT
 FROM bucketed_transactions
 GROUP BY size_category
 ORDER BY size_category;
+
+
+"""
+1. Business Question
+
+How much does it cost, in USD, to execute USDC transfers on the Ethereum network, and how does this cost vary over time?
+
+This helps businesses or analysts understand the transaction costs associated with using USDC on Ethereum.
+2. Purpose
+Analyze on-chain transfer fees for USDC transactions and Evaluate efficiency and cost of using USDC for payments, remittances, or DeFi activities.
+
+3. Output
+Column	Description
+block_time	Timestamp when the transaction occurred
+fee_usd	Transaction fee in USD, calculated as gas_used * gas_price / 1e18
+
+Example output (first 10 rows):
+
+block_time	fee_usd
+2025-11-22 12:00:01	0.45
+2025-11-22 12:03:45	0.52
+...	...
+4. Used For
+
+Evaluate how expensive USDC transfers are for users or businesses and optimize strategies for sending large volumes of USDC on Ethereum.
+
+
+"""
+select
+    block_time
+    , (CAST(gas_used as DOUBLE) * CAST(gas_price as DOUBLE)) / 1e18 as fee_usd
+from ethereum.transactions tr
+    inner join erc20_ethereum.evt_transfer tt on tr.hash = tt.evt_tx_hash
+where tt.contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+limit 10;
+
+
+"""
+1)Business Question
+"How does Ethereum network congestion (measured by gas prices) affect USDC stablecoin transaction activity on an hourly basis, and when are the optimal times to execute transfers?"
+Purpose
+To provide granular, hour-by-hour visibility into real-time correlation between gas prices and USDC transaction volume
+This analysis enables users and businesses to make data-driven decisions about when to execute USDC transfers to minimize costs while maximizing transaction success probability.
+
+Output
+The query produces an hourly time-series dataset containing:
+Transaction Metrics:
+
+hour: Timestamp (hourly granularity)
+usdc_tx_count: Number of USDC transfers per hour
+usdc_volume: Total USD value transferred per hour
+
+Gas/Congestion Metrics:
+
+avg_gas_gwei: Average gas price in Gwei
+max_gas_gwei: Peak gas price for the hour
+min_gas_gwei: Lowest gas price for the hour
+network_condition: Categorical classification (HIGH_CONGESTION > 100 Gwei, MODERATE > 50 Gwei, LOW_CONGESTION ≤ 50 Gwei)
+
+Time Range: Last 7 days of hourly data
+
+4)Used For
+
+Transaction Scheduling: Identify specific hours when gas prices are lowest to schedule large USDC transfers, potentially saving thousands in fees
+Batch Processing: Consolidate multiple transfers during low-congestion windows
+Cost Forecasting: Predict hourly gas costs for budgeting purposes
+
+Example Use Case:
+A company needing to transfer $10M USDC could save $5,000-$15,000 in gas fees by waiting for a low-congestion hour (20 Gwei) versus executing during peak congestion (150 Gwei).RetryClaude can make mistakes. Please double-check responses. Sonnet 4.5
+"""
+WITH hourly_usdc AS (
+    SELECT
+        DATE_TRUNC('hour', evt_block_time) AS hour,
+        COUNT(evt_tx_hash) AS usdc_tx_count,
+        SUM(value / 1e6) AS usdc_volume
+    FROM erc20_ethereum.evt_Transfer
+    WHERE contract_address = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+        AND evt_block_time >= NOW() - INTERVAL '7' DAY
+    GROUP BY 1
+),
+gas_metrics AS (
+    SELECT
+        DATE_TRUNC('hour', block_time) AS hour,
+        AVG(gas_price / 1e9) AS avg_gas_gwei,
+        MAX(gas_price / 1e9) AS max_gas_gwei,
+        MIN(gas_price / 1e9) AS min_gas_gwei
+    FROM ethereum.transactions
+    WHERE block_time >= NOW() - INTERVAL '7' DAY
+    GROUP BY 1
+)
+SELECT
+    u.hour,
+    u.usdc_tx_count,
+    u.usdc_volume,
+    g.avg_gas_gwei,
+    g.max_gas_gwei,
+    g.min_gas_gwei,
+    CASE
+        WHEN g.avg_gas_gwei > 100 THEN 'HIGH_CONGESTION'
+        WHEN g.avg_gas_gwei > 50 THEN 'MODERATE'
+        ELSE 'LOW_CONGESTION'
+    END AS network_condition
+FROM hourly_usdc u
+LEFT JOIN gas_metrics g ON u.hour = g.hour
+WHERE g.hour IS NOT NULL
+ORDER BY u.hour ASC;  
