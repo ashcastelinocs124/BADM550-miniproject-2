@@ -1,11 +1,8 @@
 
-
-
 -- ============================================================================
 -- USDC RETAIL TRANSACTION ANALYSIS - SQL APPENDIX
 -- ============================================================================
 -- Persona: Emerging Markets Analyst
--- Key Question: Do we see many smaller (retail-sized) transfers in USDC?
 -- Stablecoin: USDC (Circle)
 -- Time Period: Last 6 months
 -- ============================================================================
