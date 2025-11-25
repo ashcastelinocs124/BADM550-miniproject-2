@@ -90,7 +90,7 @@ Notes for Windows PowerShell users running a CLI tool:
 
 ## Author / License
 
-- Author: Generated from `code.sql` (repository: BADM550-miniproject-2)
+- Author: Ash Castelino, Barbara Chen, Brent Mueller, Alexandra Tirlea
 - License: Use as you see fit — add a license file if required for your project.
 
 ## Next steps / improvements
@@ -100,6 +100,3 @@ Notes for Windows PowerShell users running a CLI tool:
 
 ---
 
-If you'd like, I can also:
-- Adjust the README to target a specific SQL engine (Trino/Presto, Snowflake, BigQuery) and update the exact syntax.
-- Create a short SQL smoke test that verifies table presence and the USDC contract address formatting.
